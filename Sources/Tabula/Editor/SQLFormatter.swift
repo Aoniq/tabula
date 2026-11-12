@@ -87,7 +87,7 @@ enum SQLFormatter {
                     if upper == "SELECT" && prev.map({ ns.substring(with: $0.range) }) == "(" {
                         // subquery start stays on same line
                     } else {
-                        newline()
+                        newline(upper == "ON" ? 1 : 0)
                     }
                 }
                 if joinWords.contains(upper) && !joinWords.contains(prevWord) && !out.isEmpty { newline() }

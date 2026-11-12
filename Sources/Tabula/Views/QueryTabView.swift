@@ -173,6 +173,24 @@ struct ResultsPane: View {
                     .labelsHidden().fixedSize()
                 }
                 Spacer()
+                if let r = query.selectedResult, !query.showLog, r.isResultSet {
+                    let m = query.model(for: r)
+                    if let t = m.editTable {
+                        if m.hasChanges {
+                            Button("Discard") { m.discardChanges() }
+                            Button("Review") {
+                                ws.review = .init(title: "Review changes to \(t.name)", statements: m.changeStatements()) {
+                                    Task { await query.commitResultEdits(m) }
+                                }
+                            }
+                            Button("Commit \(m.changeCount)") { Task { await query.commitResultEdits(m) } }
+                                .buttonStyle(.borderedProminent)
+                        } else {
+                            Label("Editable · \(t.name)", systemImage: "pencil").font(.caption).foregroundStyle(.secondary)
+                                .help("Double-click a cell to edit. Changes are committed to \(t.name) by primary key.")
+                        }
+                    }
+                }
                 if let r = query.selectedResult, !query.showLog {
                     Text("\(r.summary) · \(String(format: "%.0f ms", r.duration * 1000))")
                         .font(.caption).foregroundStyle(.secondary).monospacedDigit()

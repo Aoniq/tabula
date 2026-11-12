@@ -57,7 +57,43 @@ final class QueryTabState {
         let m = ResultGridModel(result: r, workspace: workspace)
         m.onSelection = { [weak self] s in self?.resultSelection = s }
         resultModels[r.id] = m
+        Task { await detectEditable(m) }
         return m
+    }
+
+    private static let fromRegex = try! NSRegularExpression(pattern: #"(?i)\bfrom\s+((?:[`"]?[\w$]+[`"]?\.)?[`"]?[\w$]+[`"]?)"#)
+
+    /// Results of `SELECT … FROM one_table` that include the primary key can be edited in place.
+    private func detectEditable(_ m: ResultGridModel) async {
+        guard let ws = workspace, ws.family != .redis, ws.config.safeMode != .readOnly else { return }
+        let sql = m.result.statement
+        let words = SQLTokenizer.leadingKeywords(sql, count: 400)
+        guard words.first == "SELECT" else { return }
+        let blockers: Set<String> = ["JOIN", "UNION", "GROUP", "DISTINCT", "INTERSECT", "EXCEPT", "HAVING", "INTO"]
+        guard !words.contains(where: { blockers.contains($0) }), words.filter({ $0 == "SELECT" }).count == 1 else { return }
+        let ns = sql as NSString
+        let matches = Self.fromRegex.matches(in: sql, range: NSRange(location: 0, length: ns.length))
+        guard matches.count == 1, let obj = ws.findObject(named: ns.substring(with: matches[0].range(at: 1))), obj.kind == .table else { return }
+        let cols = await ws.columns(for: obj)
+        let tableCols = Set(cols.map(\.name))
+        let resultCols = m.result.columns.map(\.name)
+        let pk = cols.filter(\.isPrimaryKey).map(\.name)
+        guard !pk.isEmpty, pk.allSatisfy(resultCols.contains), resultCols.allSatisfy(tableCols.contains), Set(resultCols).count == resultCols.count else { return }
+        m.editTable = obj
+        m.keyColumns = pk
+    }
+
+    func commitResultEdits(_ m: ResultGridModel) async {
+        guard let ws = workspace else { return }
+        let stmts = m.changeStatements()
+        guard !stmts.isEmpty, ws.approveWrites(stmts) else { return }
+        do {
+            try await ws.executeTransaction(stmts)
+            ws.showToast("Committed \(stmts.count) change\(stmts.count == 1 ? "" : "s")")
+            await run([m.result.statement])
+        } catch {
+            ws.showToast("Commit failed: \(error.localizedDescription)", error: true)
+        }
     }
 
     func request(_ r: EditorRequest) {

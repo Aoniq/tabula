@@ -72,6 +72,19 @@ enum DevSnapshot {
         await pause(1.2)
         snap(win, "\(out)/06-query.png")
 
+        if ws.family != .redis {
+            let q2 = ws.newQueryTab(sql: "SELECT * FROM products ORDER BY id LIMIT 20;", title: "Editable result")
+            await q2.runAll()
+            if let r = q2.selectedResult {
+                let m = q2.model(for: r)
+                await pause(0.8)
+                m.gridSetValue(.text("Renamed product"), row: 0, column: 2)
+                print("editable result:", m.editTable?.name ?? "no", "changes:", m.changeStatements())
+            }
+            await pause(0.8)
+            snap(win, "\(out)/06b-editable-result.png")
+        }
+
         ws.openProcessList()
         await pause(1.2)
         snap(win, "\(out)/07-processes.png")

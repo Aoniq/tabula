@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Observation
 
 /// Everything the AppKit grid needs from a model.
 @MainActor
@@ -76,17 +77,25 @@ extension TableTabState: GridDataSource {
     }
 }
 
-/// Read-only grid model for query results, with client-side sorting.
+/// Grid model for query results: client-side sorting, and inline editing when the
+/// result comes from a simple single-table SELECT that includes the primary key.
 @MainActor
+@Observable
 final class ResultGridModel: GridDataSource {
     let result: QueryResult
-    weak var workspace: WorkspaceState?
+    @ObservationIgnored weak var workspace: WorkspaceState?
     private var order: [Int]
     private(set) var sort: [SortKey] = []
     var selection = IndexSet()
     var version = 0
-    var onSelection: ((IndexSet) -> Void)?
-    var onChange: (() -> Void)?
+    @ObservationIgnored var onSelection: ((IndexSet) -> Void)?
+    @ObservationIgnored var onChange: (() -> Void)?
+
+    // Editing (set by QueryTabState when the result is editable)
+    var editTable: DBObject?
+    var keyColumns: [String] = []
+    private(set) var edits: [Int: [Int: EditValue]] = [:]   // keyed by original row index
+    private(set) var deleted: Set<Int> = []
 
     init(result: QueryResult, workspace: WorkspaceState?) {
         self.result = result
@@ -94,19 +103,88 @@ final class ResultGridModel: GridDataSource {
         self.order = Array(result.rows.indices)
     }
 
+    var hasChanges: Bool { !edits.isEmpty || !deleted.isEmpty }
+    var changeCount: Int { edits.count + deleted.count }
+
     var gridColumns: [ResultColumn] { result.columns }
     var gridRowCount: Int { result.rows.count }
     func gridValue(row: Int, column: Int) -> String? {
         guard row < order.count else { return nil }
-        let r = result.rows[order[row]]
+        let orig = order[row]
+        if let e = edits[orig]?[column] { return e.displayText }
+        let r = result.rows[orig]
         return column < r.count ? r[column] : nil
     }
     var gridSort: [SortKey] { sort }
+    var gridTable: DBObject? { editTable }
     var gridDialect: SQLDialect { workspace?.dialect ?? SQLDialect(family: .postgres) }
     var gridSelection: IndexSet { selection }
+    var gridEditable: Bool { editTable != nil && workspace?.config.safeMode != .readOnly }
+
+    func gridIsEdited(row: Int, column: Int) -> Bool {
+        row < order.count && edits[order[row]]?[column] != nil
+    }
+
+    func gridRowState(_ row: Int) -> GridRowState {
+        guard row < order.count else { return .normal }
+        let orig = order[row]
+        if deleted.contains(orig) { return .deleted }
+        return edits[orig] == nil ? .normal : .edited
+    }
+
+    func gridSetValue(_ value: EditValue, row: Int, column: Int) {
+        guard gridEditable, row < order.count else { return }
+        let orig = order[row]
+        let original = result.rows[orig][column]
+        let same: Bool
+        switch value {
+        case .null: same = original == nil
+        case .text(let s): same = original == s
+        case .defaultValue: same = false
+        }
+        if same {
+            edits[orig]?[column] = nil
+            if edits[orig]?.isEmpty == true { edits[orig] = nil }
+        } else {
+            edits[orig, default: [:]][column] = value
+        }
+        version += 1
+    }
+
+    func gridDeleteRows(_ rows: IndexSet) {
+        guard gridEditable else { return }
+        for r in rows where r < order.count {
+            let orig = order[r]
+            if deleted.contains(orig) { deleted.remove(orig) } else { deleted.insert(orig) }
+        }
+        version += 1
+    }
+
     func gridSelectionChanged(_ rows: IndexSet) {
         selection = rows
         onSelection?(rows)
+    }
+
+    func discardChanges() {
+        edits.removeAll()
+        deleted.removeAll()
+        version += 1
+    }
+
+    func changeStatements() -> [String] {
+        guard let table = editTable else { return [] }
+        let d = gridDialect
+        let names = result.columns.map(\.name)
+        func keys(_ orig: Int) -> [(String, String?)] {
+            keyColumns.compactMap { k in names.firstIndex(of: k).map { (k, result.rows[orig][$0]) } }
+        }
+        var out: [String] = []
+        for orig in deleted.sorted() { out.append(d.deleteSQL(table, keys: keys(orig), limitOne: false)) }
+        for orig in edits.keys.sorted() where !deleted.contains(orig) {
+            let set = edits[orig]!.sorted { $0.key < $1.key }.map { (names[$0.key], $0.value) }
+            out.append(d.updateSQL(table, set: set, keys: keys(orig), limitOne: false))
+        }
+        return out
     }
 
     func row(_ i: Int) -> [String?] { i < order.count ? result.rows[order[i]] : [] }
