@@ -29,6 +29,11 @@ A native macOS database client in the spirit of TablePlus. Built with SwiftUI an
   - Follow foreign keys with ⌥-click.
   - Copy as TSV, CSV, JSON, SQL INSERT or Markdown.
   - Row inspector with JSON pretty-printing.
+- **ER diagram (⇧⌘E):**
+  - Live diagram of the current schema or database with crow's-foot relationships and automatic layered layout.
+  - Drag to arrange (positions are remembered), pan, pinch or ⌘-scroll to zoom, find a table, and focus on a table plus its neighbours.
+  - Show all columns, keys only or names only.
+  - Export to PNG, PDF, SVG or the clipboard, as Mermaid, DBML, PlantUML or Graphviz DOT, as a Markdown data dictionary, or as SQL DDL.
 - **Structure editor:** columns, indexes and foreign keys, with ALTER statements generated per dialect. Create tables, rename, truncate, drop and view the DDL.
 - **SQL editor:**
   - Syntax highlighting, line numbers and context-aware autocomplete (tables, aliases, columns, keywords).
@@ -59,6 +64,8 @@ swift build && .build/debug/Tabula            # run from source
 scripts/test-dbs.sh                            # start + seed Postgres/MySQL/Redis test containers (Docker)
 .build/debug/Tabula --selftest                 # driver/tokenizer self-test against the test containers
 .build/debug/Tabula --snapshot "<connection name>" /tmp/shots   # render key screens offscreen to PNG
+Tabula --erd-dump "<connection url>" [schema]  # print the ER graph as JSON
+Tabula --scrollbench "<connection url>" <table>   # measure grid scrolling performance
 ```
 
 App data lives in `~/Library/Application Support/Tabula`: connections, history, saved queries and dashboards. Passwords are kept in the Keychain under the service "Tabula".
@@ -80,4 +87,5 @@ App data lives in `~/Library/Application Support/Tabula`: connections, history, 
 | ⌥⌘← / ⌥⌘→ | Previous / next page |
 | ⌘R | Refresh |
 | ⌥⌘I / ⌘J | Row inspector / AI assistant |
+| ⇧⌘E | ER diagram |
 | ⇧⌘[ / ⇧⌘] | Previous / next tab |
