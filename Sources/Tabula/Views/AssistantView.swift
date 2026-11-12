@@ -22,6 +22,7 @@ struct AssistantView: View {
 // MARK: - Setup state
 
 private struct AssistantSetupView: View {
+    @Environment(\.openSettings) private var openSettings
     var body: some View {
         VStack(spacing: 12) {
             Spacer()
@@ -33,11 +34,13 @@ private struct AssistantSetupView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+                
             Text("Add your Anthropic API key to get started.")
                 .font(.callout)
                 .multilineTextAlignment(.center)
-            SettingsLink {
+            Button {
+                openSettings()
+            } label: {
                 Label("Open AI Settings…", systemImage: "key")
             }
             .controlSize(.large)
@@ -108,7 +111,7 @@ private struct AssistantChatView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+                
             Spacer()
         }
         .padding(16)
@@ -226,7 +229,7 @@ private struct AssistantMessageView: View {
             VStack(alignment: .trailing, spacing: 4) {
                 Text(message.text)
                     .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                    
                     .padding(.horizontal, 10)
                     .padding(.vertical, 7)
                     .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 10))
@@ -245,7 +248,7 @@ private struct AssistantMessageView: View {
         if message.isError {
             VStack(alignment: .leading, spacing: 6) {
                 Label {
-                    Text(message.text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Text(message.text).textSelection(.enabled)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 }
@@ -318,7 +321,7 @@ private struct AssistantProseView: View {
         let attr = (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
         return Text(attr)
-            .fixedSize(horizontal: false, vertical: true)
+            
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

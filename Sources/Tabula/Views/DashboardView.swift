@@ -309,7 +309,9 @@ struct DashboardGridLayout: Layout {
     var spacing: CGFloat = 12
     var maxColumns = 4
 
-    private func frames(width: CGFloat, subviews: Subviews) -> [CGRect] {
+    private func frames(width rawWidth: CGFloat, subviews: Subviews) -> [CGRect] {
+        // SwiftUI may propose infinite/NaN widths (e.g. during ideal-size queries).
+        let width = rawWidth.isFinite && rawWidth > 0 ? rawWidth : minColumnWidth * 2 + spacing
         let cols = max(1, min(maxColumns, Int((width + spacing) / (minColumnWidth + spacing))))
         let colW = (width - spacing * CGFloat(cols - 1)) / CGFloat(cols)
         var frames: [CGRect] = []
@@ -340,7 +342,7 @@ struct DashboardGridLayout: Layout {
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? 1000
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? 1000
         let f = frames(width: width, subviews: subviews)
         return CGSize(width: width, height: f.map(\.maxY).max() ?? 0)
     }

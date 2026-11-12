@@ -35,6 +35,14 @@ enum DevSnapshot {
         let win = host(WorkspaceView(ws: ws).frame(width: 1360, height: 860), size: NSSize(width: 1360, height: 860))
         await pause(1.0)
         snap(win, "\(out)/02-workspace.png")
+        if CommandLine.arguments.contains("--assistant-first") {
+            ws.showInspector = true
+            ws.showAssistant = !CommandLine.arguments.contains("--row-panel")
+            await pause(2.0)
+            snap(win, "\(out)/02b-assistant.png")
+            ws.showInspector = false
+            await pause(1.0)
+        }
 
         if let table = ws.objects.first(where: { $0.kind == .table && ["customers", "user:1"].contains($0.name) }) ?? ws.objects.first(where: { $0.kind == .table }) {
             ws.openTable(table)
@@ -95,7 +103,8 @@ enum DevSnapshot {
             snap(win, "\(out)/06c-dashboard.png")
             ws.showInspector = true
             ws.showAssistant = true
-            await pause(0.8)
+            ws.selectNextTab(-1)
+            await pause(2.5)
             snap(win, "\(out)/06d-assistant.png")
             ws.showInspector = false
         }
