@@ -218,3 +218,33 @@ enum ScrollBench {
         return nil
     }
 }
+
+/// Developer tool: `Tabula --erd-dump <connection url> [schema]` prints the ER graph as JSON.
+@MainActor
+enum ERDDump {
+    static var requested: Bool { CommandLine.arguments.contains("--erd-dump") }
+
+    static func run() async {
+        let args = CommandLine.arguments
+        guard let i = args.firstIndex(of: "--erd-dump"), args.count > i + 1, let (cfg, pw) = ConnectionURL.parse(args[i + 1]) else {
+            FileHandle.standardError.write("usage: --erd-dump <connection url> [schema]\n".data(using: .utf8)!)
+            exit(2)
+        }
+        var c = cfg
+        c.ssl.mode = .disable
+        let ws = WorkspaceState(config: c)
+        await ws.connect(password: pw ?? "")
+        guard ws.isConnected else { FileHandle.standardError.write("connect failed: \(ws.status)\n".data(using: .utf8)!); exit(1) }
+        if args.count > i + 2 { await ws.switchSchema(args[i + 2]) }
+        do {
+            let g = try await ERDLoader.load(ws)
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            print(String(data: try enc.encode(g), encoding: .utf8)!)
+            exit(0)
+        } catch {
+            FileHandle.standardError.write("\(error.localizedDescription)\n".data(using: .utf8)!)
+            exit(1)
+        }
+    }
+}

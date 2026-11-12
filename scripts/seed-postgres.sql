@@ -56,3 +56,14 @@ CREATE MATERIALIZED VIEW order_totals AS SELECT customer_id, count(*) AS orders,
 CREATE FUNCTION customer_revenue(cid integer) RETURNS numeric LANGUAGE sql AS $$ SELECT COALESCE(sum(total),0) FROM orders WHERE customer_id = cid $$;
 CREATE TABLE analytics.daily_stats (day date PRIMARY KEY, visits integer, signups integer);
 INSERT INTO analytics.daily_stats SELECT d::date, (random()*1000)::int, (random()*50)::int FROM generate_series(now() - interval '60 days', now(), interval '1 day') d;
+-- Edge cases for the ER diagram: self reference, composite FK, 1:1, cross-schema, odd names
+DROP SCHEMA IF EXISTS erd_edge CASCADE;
+CREATE SCHEMA erd_edge;
+CREATE TABLE erd_edge.employees (id int PRIMARY KEY, name text NOT NULL, manager_id int REFERENCES erd_edge.employees(id), "Hire Date" date);
+CREATE TABLE erd_edge.employee_profiles (employee_id int PRIMARY KEY REFERENCES erd_edge.employees(id) ON DELETE CASCADE, bio text);
+CREATE TABLE erd_edge."Warehouse Bins" (warehouse_code char(3), bin_no int, capacity numeric(10,2), PRIMARY KEY (warehouse_code, bin_no));
+CREATE TABLE erd_edge.stock_moves (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, warehouse_code char(3) NOT NULL, bin_no int NOT NULL,
+  product_id int REFERENCES public.products(id), moved_by int REFERENCES erd_edge.employees(id), qty int NOT NULL DEFAULT 1,
+  FOREIGN KEY (warehouse_code, bin_no) REFERENCES erd_edge."Warehouse Bins"(warehouse_code, bin_no));
+COMMENT ON TABLE erd_edge.stock_moves IS 'Every stock movement between bins';
+CREATE TABLE erd_edge.badges (id serial PRIMARY KEY, employee_id int UNIQUE REFERENCES erd_edge.employees(id), "CamelCaseCol" text);
