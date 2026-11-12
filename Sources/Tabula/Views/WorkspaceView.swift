@@ -110,6 +110,7 @@ struct TabContentView: View {
         case .query(let q): QueryTabView(ws: ws, query: q)
         case .processes(let p): ProcessListView(state: p)
         case .dashboard(let d): DashboardView(state: d)
+        case .erd(let e): ERDView(state: e)
         }
     }
 }
@@ -170,6 +171,10 @@ struct WorkspaceToolbar: ToolbarContent {
             }
             Button { Task { await ws.reloadObjects(); if let t = ws.selectedTableTab { await t.reload() } } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                 .help("Refresh (⌘R)")
+            if ws.family != .redis {
+                Button { ws.openERD() } label: { Label("ER Diagram", systemImage: "point.3.filled.connected.trianglepath.dotted") }
+                    .help("ER diagram (⇧⌘E)")
+            }
             Button { ws.newQueryTab() } label: { Label("SQL Query", systemImage: "terminal") }
                 .help("New query tab (⌘T)")
             Button { ws.showOpenAnything = true } label: { Label("Open Anything", systemImage: "magnifyingglass") }

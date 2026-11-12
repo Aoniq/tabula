@@ -184,6 +184,9 @@ struct OpenAnythingView: View {
             out.append(Entry(id: "cmd:proc", title: "Process List", subtitle: "command", icon: "cpu") { [ws] in ws.openProcessList() })
         }
         out.append(Entry(id: "cmd:metrics", title: "Metrics Dashboard", subtitle: "command", icon: "chart.bar.xaxis") { [ws] in ws.openDashboard() })
+        if ws.family != .redis {
+            out.append(Entry(id: "cmd:erd", title: "ER Diagram", subtitle: "command", icon: "point.3.filled.connected.trianglepath.dotted") { [ws] in ws.openERD() })
+        }
         return out
     }
 

@@ -16,6 +16,7 @@ final class WorkspaceTab: Identifiable {
         case query(QueryTabState)
         case processes(ProcessListState)
         case dashboard(DashboardState)
+        case erd(ERDState)
     }
     let id = UUID()
     let content: Content
@@ -30,6 +31,7 @@ final class WorkspaceTab: Identifiable {
         case .query(let q): return q.title
         case .processes: return "Processes"
         case .dashboard: return "Metrics"
+        case .erd: return "ER Diagram"
         }
     }
 
@@ -39,6 +41,7 @@ final class WorkspaceTab: Identifiable {
         case .query: return "terminal"
         case .processes: return "cpu"
         case .dashboard: return "chart.bar.xaxis"
+        case .erd: return "point.3.filled.connected.trianglepath.dotted"
         }
     }
 
@@ -406,6 +409,23 @@ final class WorkspaceState {
         tabs.append(tab)
         selectedTabID = tab.id
         Task { await d.refreshAll() }
+    }
+
+    /// Open (or focus) the ER diagram tab, optionally selecting a table.
+    func openERD(select o: DBObject? = nil) {
+        let id = o.map { ERDTable.makeID(schema: family == .postgres ? ($0.schema ?? currentSchema) : $0.schema, name: $0.name) }
+        if let t = tabs.first(where: { if case .erd = $0.content { return true } else { return false } }), case .erd(let e) = t.content {
+            selectedTabID = t.id
+            if let id {
+                e.selected = id
+                e.request(.center(id))
+            }
+            return
+        }
+        let e = ERDState(workspace: self, select: id)
+        let tab = WorkspaceTab(.erd(e))
+        tabs.append(tab)
+        selectedTabID = tab.id
     }
 
     func openDefinition(_ o: DBObject) {

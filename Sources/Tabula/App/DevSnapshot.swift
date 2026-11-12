@@ -42,6 +42,36 @@ enum DevSnapshot {
         let win = host(WorkspaceView(ws: ws).frame(width: 1360, height: 860), size: NSSize(width: 1360, height: 860))
         await pause(1.0)
         snap(win, "\(out)/02-workspace.png")
+        if let si = args.firstIndex(of: "--schema"), args.count > si + 1 { await ws.switchSchema(args[si + 1]); await pause(0.5) }
+        if args.contains("--erd-only") {
+            ws.openERD()
+            await pause(2.0)
+            snap(win, "\(out)/erd-1-overview.png")
+            if case .erd(let e) = ws.selectedTab?.content, let g = e.graph {
+                let pick = g.tables.first { $0.name == "orders" || $0.name == "employees" } ?? g.tables.first!
+                e.select(pick.id)
+                await pause(0.8)
+                snap(win, "\(out)/erd-2-selected.png")
+                e.setFocus(true)
+                await pause(1.2)
+                snap(win, "\(out)/erd-3-focus.png")
+                e.setFocus(false)
+                e.options.detail = .keys
+                await pause(1.2)
+                snap(win, "\(out)/erd-4-keys.png")
+                e.options.detail = .all
+                e.selected = nil
+                if let sc = e.scene() {
+                    let cap = "\(g.title) · \(g.tables.count) tables · \(g.relations.count) relationships"
+                    try? ERDImageExport.png(sc, theme: .light, caption: cap)?.write(to: URL(fileURLWithPath: "\(out)/export.png"))
+                    try? ERDImageExport.png(sc, theme: .dark, caption: cap)?.write(to: URL(fileURLWithPath: "\(out)/export-dark.png"))
+                    try? ERDImageExport.pdf(sc, theme: .light, caption: cap, title: g.title)?.write(to: URL(fileURLWithPath: "\(out)/export.pdf"))
+                    try? ERDImageExport.svg(sc, theme: .light, caption: cap).write(toFile: "\(out)/export.svg", atomically: true, encoding: .utf8)
+                }
+            }
+            print("erd snapshots written to \(out)")
+            exit(0)
+        }
         if CommandLine.arguments.contains("--assistant-first") {
             ws.showInspector = true
             ws.showAssistant = !CommandLine.arguments.contains("--row-panel")

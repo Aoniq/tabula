@@ -341,6 +341,7 @@ struct TabulaCommands: Commands {
                 Task {
                     if let t = table { await t.mode == .data ? t.reload() : t.loadStructure() }
                     if case .dashboard(let d) = ws?.selectedTab?.content { await d.refreshAll(); return }
+                    if case .erd(let e) = ws?.selectedTab?.content { await ws?.reloadObjects(); await e.load(); return }
                     if case .processes(let p) = ws?.selectedTab?.content { await p.refresh(); return }
                     await ws?.reloadObjects()
                 }
@@ -367,6 +368,9 @@ struct TabulaCommands: Commands {
                 if let ws, let sql = ws.dialect.usersSQL { ws.newQueryTab(sql: sql, title: "Users", run: true) }
             }
             .disabled(!hasWS || ws?.dialect.usersSQL == nil)
+            Button("ER Diagram") { ws?.openERD() }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(!hasWS || ws?.family == .redis)
             Button("Metrics Dashboard") { ws?.openDashboard() }
                 .disabled(!hasWS || ws?.family == .redis)
             Divider()

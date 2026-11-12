@@ -124,6 +124,7 @@ struct SidebarView: View {
         }
         if ws.family != .redis {
             Button("Show Definition (DDL)") { ws.openDefinition(o) }
+            if o.kind.isBrowsable { Button("Show in ER Diagram") { ws.openERD(select: o) } }
         }
         Button("Copy Name") {
             NSPasteboard.general.clearContents()
