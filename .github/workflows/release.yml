@@ -1,0 +1,38 @@
+name: Release
+
+# Push a tag like v1.2.3 to build Tabula.app on a clean runner and publish it as a GitHub Release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install native client libraries
+        run: brew install postgresql@17 mariadb-connector-c
+      - name: Build app bundle
+        run: scripts/build-app.sh
+      - name: Package
+        id: pkg
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ZIP="Tabula-${VERSION}-macOS-arm64.zip"
+          ditto -c -k --keepParent build/Tabula.app "$ZIP"
+          shasum -a 256 "$ZIP" > "$ZIP.sha256"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          plutil -p build/Tabula.app/Contents/Info.plist | grep -E "ShortVersion|CFBundleVersion"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="docs/releases/${GITHUB_REF_NAME}.md"
+          ARGS=(--title "Tabula ${GITHUB_REF_NAME}")
+          if [ -f "$NOTES" ]; then ARGS+=(--notes-file "$NOTES"); else ARGS+=(--generate-notes); fi
+          gh release create "$GITHUB_REF_NAME" "${{ steps.pkg.outputs.zip }}" "${{ steps.pkg.outputs.zip }}.sha256" "${ARGS[@]}"

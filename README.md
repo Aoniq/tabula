@@ -58,6 +58,10 @@ A fast, native macOS database client for PostgreSQL, MySQL/MariaDB, SQLite and R
   - Keys live in the Keychain. Only table and column definitions plus your current query are sent, never row data.
 - Light and dark mode, configurable fonts and page size.
 
+## Download
+
+Get the latest build from [Releases](https://github.com/Aoniq/tabula/releases/latest). It needs macOS 14 or later on Apple Silicon. The app isn't notarized, so the first time you open it, right-click **Tabula.app** → **Open**.
+
 ## Build & install
 
 Tabula is built from source. You need macOS 14 or later, Xcode 16 or later, and [Homebrew](https://brew.sh).

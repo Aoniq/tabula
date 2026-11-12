@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install native client libraries
         run: brew install postgresql@17 mariadb-connector-c
       - name: Build (debug)
@@ -17,7 +17,7 @@ jobs:
       - name: Build app bundle (release)
         run: scripts/build-app.sh
       - name: Upload app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Tabula.app
           path: build/Tabula.app

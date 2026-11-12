@@ -6,6 +6,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+# Marketing version: $TABULA_VERSION, else the exact tag (v1.2.3 → 1.2.3), else the latest tag, else 1.0.0
+SHORT_VERSION="${TABULA_VERSION:-$(git describe --tags --exact-match 2>/dev/null || git describe --tags --abbrev=0 2>/dev/null || echo v1.0.0)}"
+SHORT_VERSION="${SHORT_VERSION#v}"
 
 echo "▸ Compiling (release)…"
 swift build -c release --arch arm64 2>&1 | grep -E "error|warning: unre|Compiling Tabula|Build complete" || true
@@ -42,7 +45,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Tabula</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
   <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>CFBundleGetInfoString</key><string>${VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
