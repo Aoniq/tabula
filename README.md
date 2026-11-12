@@ -1,6 +1,13 @@
 # Tabula
 
-A native macOS database client in the spirit of TablePlus. Built with SwiftUI and AppKit, it talks to databases through their official C client libraries.
+A fast, native macOS database client for PostgreSQL, MySQL/MariaDB, SQLite and Redis. Built with SwiftUI and AppKit, it talks to databases through their official C client libraries.
+
+![Data grid with filters](docs/screenshots/data-grid.png)
+
+| | |
+|---|---|
+| ![SQL editor](docs/screenshots/query-editor.png) | ![ER diagram](docs/screenshots/er-diagram.png) |
+| ![Structure editor](docs/screenshots/structure.png) | ![Metrics dashboard](docs/screenshots/metrics.png) |
 
 ## Supported databases
 
@@ -53,7 +60,11 @@ A native macOS database client in the spirit of TablePlus. Built with SwiftUI an
 
 ## Build & install
 
-Requirements: Xcode 16+, Homebrew `postgresql@17` and `mariadb-connector-c`. The libraries are copied into the app bundle, so the installed app does not need Homebrew at runtime.
+Tabula is built from source. You need macOS 14 or later, Xcode 16 or later, and [Homebrew](https://brew.sh).
+
+The build needs Homebrew's `postgresql@17` and `mariadb-connector-c`. The build script copies them into the app bundle, so the installed app does not need Homebrew at runtime.
+
+The app is signed ad-hoc, without an Apple Developer certificate. As a result, macOS may ask once after each rebuild for permission to read saved passwords from the Keychain; choose "Always Allow".
 
 ```bash
 brew install postgresql@17 mariadb-connector-c
@@ -92,3 +103,14 @@ App data lives in `~/Library/Application Support/Tabula`: connections, history, 
 | ⌥⌘I / ⌘J | Row inspector / AI assistant |
 | ⇧⌘E | ER diagram |
 | ⇧⌘[ / ⇧⌘] | Previous / next tab |
+
+## License
+
+Tabula is **source-available** under the [PolyForm Noncommercial License 1.0.0](LICENSE).
+
+- **Allowed:** using, studying, modifying and sharing it for any non-commercial purpose, including personal use, education, research, and charities or public institutions.
+- **Not allowed:** selling it or using it for commercial purposes without the copyright holder's permission.
+
+The libraries bundled in built copies of the app keep their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Tabula is an independent project. It is not affiliated with or endorsed by TablePlus or by any database vendor, and product names are trademarks of their respective owners.

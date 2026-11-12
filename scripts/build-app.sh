@@ -49,6 +49,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 Aoniq · PolyForm Noncommercial 1.0.0</string>
   <key>NSSupportsAutomaticTermination</key><false/>
   <key>NSAppTransportSecurity</key>
   <dict>
@@ -68,6 +69,22 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# License texts (our license + third-party notices + bundled library licenses)
+LIC="$APP/Contents/Resources/Licenses"
+mkdir -p "$LIC"
+cp LICENSE "$LIC/Tabula-LICENSE.txt"
+cp THIRD_PARTY_NOTICES.md "$LIC/THIRD_PARTY_NOTICES.md"
+copy_license() { # formula, file, target
+  local dir; dir="$(brew --prefix "$1" 2>/dev/null)"
+  [ -f "$dir/$2" ] && cp "$dir/$2" "$LIC/$3"
+}
+copy_license mariadb-connector-c COPYING.LIB "MariaDB-Connector-C-LGPL-2.1.txt"
+copy_license postgresql@17 COPYRIGHT "PostgreSQL-libpq-LICENSE.txt"
+copy_license openssl@3 LICENSE.txt "OpenSSL-3-LICENSE.txt"
+copy_license openssl@4 LICENSE.txt "OpenSSL-4-LICENSE.txt"
+copy_license krb5 NOTICE "MIT-Kerberos-NOTICE.txt"
+copy_license gettext COPYING "GNU-gettext-COPYING.txt"
 
 echo "▸ Embedding native libraries…"
 python3 scripts/bundle-dylibs.py "$APP" "${PLUGINS[@]}" 2>&1 | grep -v "invalidate the code signature"
