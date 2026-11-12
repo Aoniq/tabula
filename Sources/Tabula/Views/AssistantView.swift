@@ -30,12 +30,12 @@ private struct AssistantSetupView: View {
                 .font(.system(size: 34, weight: .light))
                 .foregroundStyle(.tint)
             Text("AI SQL Assistant").font(.headline)
-            Text("Ask Claude to write, explain, fix and optimize queries using your schema. Only table and column definitions are shared — never row data.")
+            Text("Ask an AI model to write, explain, fix and optimize queries using your schema. Only table and column definitions are shared — never row data.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 
-            Text("Add your Anthropic API key to get started.")
+            Text("Add a provider to get started: Claude, Azure AI Foundry (deployments, Claude or Agents), OpenAI, any OpenAI-compatible service, or a local model with Ollama.")
                 .font(.callout)
                 .multilineTextAlignment(.center)
             Button {
@@ -44,8 +44,6 @@ private struct AssistantSetupView: View {
                 Label("Open AI Settings…", systemImage: "key")
             }
             .controlSize(.large)
-            Link("Get an API key", destination: URL(string: "https://console.anthropic.com/settings/keys")!)
-                .font(.caption)
             Spacer()
         }
         .padding(20)
@@ -57,7 +55,8 @@ private struct AssistantSetupView: View {
 private struct AssistantChatView: View {
     let ws: WorkspaceState
     @Bindable var assistant: AssistantState
-    @AppStorage(SettingsKey.anthropicModel) private var modelSetting = AnthropicAPI.defaultModel
+    @State private var profiles = AIProfileStore.shared
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,13 +75,29 @@ private struct AssistantChatView: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: "sparkles").foregroundStyle(.tint)
-            Text(modelSetting.isEmpty ? AnthropicAPI.defaultModel : modelSetting)
+            Menu {
+                ForEach(profiles.profiles) { p in
+                    Button {
+                        profiles.activeID = p.id
+                    } label: {
+                        if p.id == profiles.activeID { Label(p.menuTitle, systemImage: "checkmark") } else { Text(p.menuTitle) }
+                    }
+                }
+                Divider()
+                Button("Manage Providers…") { openSettings() }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: profiles.active?.kind.symbol ?? "sparkles").foregroundStyle(.tint)
+                    Text(profiles.active?.menuTitle ?? "No provider")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help("Model — change it in Settings → AI")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize(horizontal: false, vertical: true)
+            .disabled(assistant.isStreaming)
+            .help("Switch AI provider — manage them in Settings › AI")
             Spacer(minLength: 4)
             Button {
                 assistant.newChat()
@@ -107,7 +122,7 @@ private struct AssistantChatView: View {
             Text("Ask about \(ws.currentDatabase.isEmpty ? ws.config.displayName : ws.currentDatabase)")
                 .font(.headline)
                 .multilineTextAlignment(.center)
-            Text("Claude sees your table and column definitions and the current query — never row data. Mention @table to include a specific table.")
+            Text("\(profiles.active?.name ?? "The model") sees your table and column definitions and the current query — never row data. Mention @table to include a specific table.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

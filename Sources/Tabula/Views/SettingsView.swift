@@ -52,7 +52,7 @@ struct SettingsView: View {
                 .tabItem { Label("AI", systemImage: "sparkles") }
         }
         .formStyle(.grouped)
-        .frame(width: 540, height: 400)
+        .frame(width: 720, height: 520)
     }
 }
 

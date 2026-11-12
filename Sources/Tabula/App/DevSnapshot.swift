@@ -17,6 +17,20 @@ enum DevSnapshot {
         let out = args[i + 2]
         try? FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
 
+        if args.contains("--ai-settings") {
+            for (n, kind, ep, model) in [("azure", AIProviderKind.azureFoundry, "https://contoso-ai.services.ai.azure.com", "gpt-5-mini"),
+                                         ("agent", .azureAgent, "https://contoso-ai.services.ai.azure.com/api/projects/analytics", "sql-helper"),
+                                         ("compat", .openAICompatible, "https://openrouter.ai/api/v1", "anthropic/claude-sonnet-4.5")] {
+                var p = AIProfile(name: n == "azure" ? "Azure GPT-5 mini" : (n == "agent" ? "Foundry SQL agent" : "OpenRouter"), kind: kind, endpoint: ep, model: model)
+                p.id = UUID()
+                let w = host(AIProfileEditor(profile: p).frame(width: 510, height: 520), size: NSSize(width: 510, height: 520))
+                await pause(0.8)
+                snap(w, "\(out)/ai-\(n).png")
+                w.close()
+            }
+            print("ai settings snapshots written")
+            exit(0)
+        }
         let welcome = host(WelcomeView().frame(width: 920, height: 600), size: NSSize(width: 920, height: 600))
         await pause(1.0)
         snap(welcome, "\(out)/01-welcome.png")
@@ -308,5 +322,44 @@ enum ERDDump {
             FileHandle.standardError.write("\(error.localizedDescription)\n".data(using: .utf8)!)
             exit(1)
         }
+    }
+}
+
+/// Developer tool: `Tabula --ai-test <kind> <endpoint> <model> <auth: apiKey|entraID|none> [key]`
+/// runs one streaming request through AIClient and prints the events.
+@MainActor
+enum AITestTool {
+    static var requested: Bool { CommandLine.arguments.contains("--ai-test") }
+
+    static func run() async {
+        let a = CommandLine.arguments
+        guard let i = a.firstIndex(of: "--ai-test"), a.count > i + 4,
+              let kind = AIProviderKind(rawValue: a[i + 1]), let auth = AIAuthMode(rawValue: a[i + 4]) else {
+            print("usage: --ai-test <kind> <endpoint> <model> <auth> [key]"); exit(2)
+        }
+        var p = AIProfile(name: "test", kind: kind, endpoint: a[i + 2], model: a[i + 3], auth: auth)
+        p.id = UUID()
+        if a.count > i + 5 { Keychain.set(a[i + 5], account: p.keychainAccount) }
+        defer { Keychain.delete(account: p.keychainAccount) }
+        print("base:", p.baseURL?.absoluteString ?? "nil", "problem:", p.setupProblem ?? "none")
+        var text = ""
+        do {
+            for try await ev in AIClient.stream(profile: p, system: "SYSTEM CONTEXT", messages: [
+                AnthropicMessage(role: .user, text: "first question"),
+                AnthropicMessage(role: .assistant, text: "first answer"),
+                AnthropicMessage(role: .user, text: "second question"),
+            ]) {
+                switch ev {
+                case .text(let t): text += t
+                case .ignored: break
+                default: print("event:", ev)
+                }
+            }
+            print("TEXT:", text)
+        } catch {
+            print("ERROR:", error.localizedDescription.replacingOccurrences(of: "\n", with: " | "))
+        }
+        Keychain.delete(account: p.keychainAccount)
+        exit(0)
     }
 }

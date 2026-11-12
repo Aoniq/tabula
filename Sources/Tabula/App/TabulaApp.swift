@@ -88,6 +88,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if DevSnapshot.requested {
             Task { @MainActor in await DevSnapshot.run() }
         }
+        if AITestTool.requested {
+            Task { @MainActor in await AITestTool.run() }
+        }
         if ERDDump.requested {
             Task { @MainActor in await ERDDump.run() }
         }

@@ -45,7 +45,10 @@ A native macOS database client in the spirit of TablePlus. Built with SwiftUI an
   - Export to CSV, TSV, JSON, SQL, Markdown or HTML.
   - Import CSV with column mapping, and run SQL files.
   - Backup and restore through pg_dump/psql, mysqldump/mysql and sqlite3.
-- **AI assistant** (Claude API, bring your own key) that knows your schema. It can insert or run the SQL it suggests.
+- **AI assistant** (⌘J) that knows your schema. It can insert or run the SQL it suggests. Configure any number of providers in Settings › AI and switch between them in the chat panel:
+  - **Azure AI Foundry:** model deployments (GPT, o-series, DeepSeek, Grok, Llama, Mistral, Phi) via the OpenAI v1 API, Claude deployments, and Foundry Agents. Sign in with an API key or Microsoft Entra ID via the Azure CLI (`az login`).
+  - Anthropic (Claude), OpenAI, any OpenAI-compatible service (presets for OpenRouter, Gemini, Mistral, DeepSeek, xAI, Groq, Together, LM Studio, Foundry Local), and Ollama for local models.
+  - Keys live in the Keychain. Only table and column definitions plus your current query are sent, never row data.
 - Light and dark mode, configurable fonts and page size.
 
 ## Build & install

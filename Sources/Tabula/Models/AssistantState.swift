@@ -7,7 +7,7 @@ extension Notification.Name {
     static let assistantAPIKeyChanged = Notification.Name("TabulaAssistantAPIKeyChanged")
 }
 
-/// Per-workspace AI assistant conversation (Claude Messages API).
+/// Per-workspace AI assistant conversation (any configured AI provider profile).
 @MainActor
 @Observable
 final class AssistantState {
@@ -94,14 +94,17 @@ final class AssistantState {
         }
     }
 
-    var model: String {
-        let m = UserDefaults.standard.string(forKey: SettingsKey.anthropicModel)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return m.isEmpty ? AnthropicAPI.defaultModel : m
-    }
+    /// The provider profile used for new messages.
+    var profile: AIProfile? { AIProfileStore.shared.active }
+
+    var model: String { profile?.effectiveModel ?? "" }
+
+    /// Name shown in status lines ("Waiting for …").
+    var providerName: String { profile?.name ?? "the model" }
 
     func refreshKeyStatus() {
-        let key = Keychain.get(account: AnthropicAPI.keychainAccount) ?? ""
-        hasAPIKey = !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // "Configured" = there is an active profile; credential problems surface as a clear error on send.
+        hasAPIKey = AIProfileStore.shared.active != nil
     }
 
     // MARK: Quick actions
@@ -140,7 +143,7 @@ final class AssistantState {
     private func send(display: String, instruction: String, ws: WorkspaceState, forceAttachment: Bool) {
         guard !isStreaming else { return }
         refreshKeyStatus()
-        guard hasAPIKey, let key = Keychain.get(account: AnthropicAPI.keychainAccount)?.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        guard hasAPIKey, let profile = self.profile else { return }
 
         var user = Message(role: .user, text: display)
         if let att = AssistantContext.editorAttachment(ws: ws),
@@ -159,9 +162,11 @@ final class AssistantState {
         status = "Reading schema…"
 
         let replyID = reply.id
-        let model = self.model
+        if let problem = profile.setupProblem {
+            return finish(replyID: replyID, error: AIProviderError(status: 401, message: "“\(profile.name)” isn't fully set up: \(problem) Open Settings › AI to fix it."))
+        }
         task = Task { [weak self] in
-            await self?.stream(ws: ws, apiKey: key, model: model, replyID: replyID)
+            await self?.stream(ws: ws, profile: profile, replyID: replyID)
         }
     }
 
@@ -191,12 +196,16 @@ final class AssistantState {
         isStreaming = true
         status = "Reading schema…"
         refreshKeyStatus()
-        guard let key = Keychain.get(account: AnthropicAPI.keychainAccount)?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
-            finish(replyID: reply.id, error: AnthropicAPIError(status: 401, type: "authentication_error", message: "No API key", retryAfter: nil))
+        guard let profile = self.profile else {
+            finish(replyID: reply.id, error: AIProviderError(status: 401, message: "No AI provider is configured. Add one in Settings › AI."))
             return
         }
-        let replyID = reply.id, model = self.model
-        task = Task { [weak self] in await self?.stream(ws: ws, apiKey: key, model: model, replyID: replyID) }
+        if let problem = profile.setupProblem {
+            finish(replyID: reply.id, error: AIProviderError(status: 401, message: "“\(profile.name)” isn't fully set up: \(problem)"))
+            return
+        }
+        let replyID = reply.id
+        task = Task { [weak self] in await self?.stream(ws: ws, profile: profile, replyID: replyID) }
     }
 
     /// Conversation as sent to the API (errors and empty replies dropped; consecutive roles merged by the request builder).
@@ -210,56 +219,67 @@ final class AssistantState {
         body(&messages[i])
     }
 
-    private func stream(ws: WorkspaceState, apiKey: String, model: String, replyID: UUID) async {
+    private func stream(ws: WorkspaceState, profile: AIProfile, replyID: UUID) async {
         let texts = messages.filter { !$0.isError }.reversed().map(\.payload)
         let system = await AssistantContext.systemPrompt(ws: ws, texts: Array(texts))
         guard !Task.isCancelled else { return finish(replyID: replyID, cancelled: true) }
-        let body = AnthropicRequest.body(model: model, system: system, messages: apiHistory)
+        let history = apiHistory
+        let model = profile.effectiveModel
+        update(replyID) { $0.note = nil }
 
-        status = "Waiting for Claude…"
+        status = profile.auth == .entraID ? "Signing in with Microsoft Entra ID…" : "Waiting for \(profile.name)…"
         var receivedText = false
         var attempt = 0
         while true {
             do {
-                for try await ev in AnthropicClient.stream(apiKey: apiKey, body: body) {
+                for try await ev in AIClient.stream(profile: profile, system: system, messages: history) {
                     if Task.isCancelled { break }
                     switch ev {
-                    case .messageStart(let m):
-                        if !m.isEmpty && m != model { update(replyID) { $0.note = "Answered by \(m)" } }
-                    case .thinkingStarted:
+                    case .model(let m):
+                        if !receivedText && status?.hasPrefix("Signing in") == true { status = "Waiting for \(profile.name)…" }
+                        if !m.isEmpty && !m.lowercased().hasPrefix(model.lowercased()) && profile.kind != .azureAgent && profile.kind.wire == .anthropicMessages {
+                            update(replyID) { $0.note = "Answered by \(m)" }
+                        }
+                    case .thinking:
                         if !receivedText { status = "Thinking…" }
-                    case .textDelta(let t):
+                    case .status(let st):
+                        if st.hasPrefix("Continued on") {
+                            update(replyID) {
+                                $0.note = st
+                                if !$0.text.isEmpty && !$0.text.hasSuffix("\n") { $0.text += "\n\n" }
+                            }
+                        } else if !receivedText {
+                            status = st
+                        }
+                    case .text(let t):
                         receivedText = true
                         status = nil
                         update(replyID) { $0.text += t }
-                    case .fallback(let to):
-                        update(replyID) {
-                            $0.note = to.isEmpty ? "Continued on a fallback model" : "Continued on \(to)"
-                            if !$0.text.isEmpty && !$0.text.hasSuffix("\n") { $0.text += "\n\n" }
-                        }
-                    case .stop(let reason, let category):
+                    case .stop(let reason):
                         switch reason {
                         case "max_tokens":
-                            update(replyID) { $0.note = "Reply was cut off (max tokens reached)." }
+                            update(replyID) { $0.note = "Reply was cut off (output limit reached)." }
                         case "refusal":
                             update(replyID) {
-                                $0.note = "Claude declined to answer this request" + (category.map { " (\($0))" } ?? "") + ". Try rephrasing."
+                                $0.note = "The model declined to answer this request. Try rephrasing."
                                 if $0.text.isEmpty { $0.text = "_I can't help with that request._" }
                             }
+                        case "content_filter":
+                            update(replyID) { $0.note = "Part of the reply was blocked by the provider's content filter." }
                         default: break
                         }
-                    case .error(let e):
+                    case .failure(let e):
                         throw e
-                    case .messageStop, .ignored:
+                    case .ignored:
                         break
                     }
                 }
                 if Task.isCancelled { return finish(replyID: replyID, cancelled: true) }
                 return finish(replyID: replyID)
-            } catch let e as AnthropicAPIError where e.isRetryable && !receivedText && attempt < 2 && !Task.isCancelled {
+            } catch let e as AIProviderError where e.isRetryable && !receivedText && attempt < 2 && !Task.isCancelled {
                 attempt += 1
                 let wait = min(e.retryAfter ?? Double(2 << attempt), 12)
-                status = e.type == "overloaded_error" ? "Claude is busy — retrying…" : "Retrying…"
+                status = "\(profile.name) is busy — retrying…"
                 try? await Task.sleep(for: .seconds(wait))
                 if Task.isCancelled { return finish(replyID: replyID, cancelled: true) }
             } catch {
@@ -277,20 +297,25 @@ final class AssistantState {
             if cancelled {
                 if m.text.isEmpty {
                     m.isError = true
-                    m.text = "Stopped before Claude replied."
+                    m.text = "Stopped before \(providerName) replied."
                 } else {
                     m.note = "Stopped — reply is incomplete."
                 }
             }
             if let error {
                 let message: String
-                if let api = error as? AnthropicAPIError {
+                if let api = error as? AIProviderError {
+                    message = api.localizedDescription
+                    m.errorStatus = api.status
+                } else if let api = error as? AnthropicAPIError {
                     message = api.localizedDescription
                     m.errorStatus = api.status ?? (api.type == "authentication_error" ? 401 : nil)
                 } else if let u = error as? URLError {
-                    message = u.code == .notConnectedToInternet || u.code == .networkConnectionLost
-                        ? "No internet connection. Check your network and try again."
-                        : "Network error: \(u.localizedDescription)"
+                    message = u.code == .cannotConnectToHost && (profile?.kind == .ollama || (profile?.endpoint.contains("localhost") ?? false))
+                        ? "Couldn't reach \(profile?.endpoint ?? "the local server"). Is it running?"
+                        : (u.code == .notConnectedToInternet || u.code == .networkConnectionLost
+                            ? "No internet connection. Check your network and try again."
+                            : "Network error: \(u.localizedDescription)")
                 } else {
                     message = error.localizedDescription
                 }
