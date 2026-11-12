@@ -22,12 +22,19 @@ enum DevSnapshot {
         snap(welcome, "\(out)/01-welcome.png")
         welcome.close()
 
-        guard let config = ConnectionStore.shared.connections.first(where: { $0.name == name }) else {
+        let ws: WorkspaceState
+        if let (cfg, pw) = ConnectionURL.parse(name) {
+            var c = cfg
+            c.ssl.mode = .disable
+            ws = WorkspaceState(config: c)
+            await ws.connect(password: pw ?? "")
+        } else if let config = ConnectionStore.shared.connections.first(where: { $0.name == name }) {
+            ws = WorkspaceState(config: config)
+            await ws.start()
+        } else {
             print("no connection named \(name)")
             exit(1)
         }
-        let ws = WorkspaceState(config: config)
-        await ws.start()
         guard ws.isConnected else {
             print("connect failed: \(ws.status)")
             exit(1)
@@ -145,5 +152,69 @@ enum DevSnapshot {
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    }
+}
+
+/// Developer tool: `Tabula --scrollbench "<connection name>" <table> [rows]` loads a table
+/// into the grid and measures how long it takes to scroll through it, then quits.
+@MainActor
+enum ScrollBench {
+    static var requested: Bool { CommandLine.arguments.contains("--scrollbench") }
+
+    static func run() async {
+        let args = CommandLine.arguments
+        guard let i = args.firstIndex(of: "--scrollbench"), args.count > i + 2,
+              let (config, password) = ConnectionURL.parse(args[i + 1]) else {
+            print("usage: --scrollbench <connection url> <table> [rows]"); exit(2)
+        }
+        let tableName = args[i + 2]
+        let rows = args.count > i + 3 ? Int(args[i + 3]) ?? 5000 : 5000
+        var cfg = config
+        cfg.ssl.mode = .disable
+        let ws = WorkspaceState(config: cfg)
+        await ws.connect(password: password ?? "")
+        guard ws.isConnected, let obj = ws.objects.first(where: { $0.name == tableName }) else { print("connect/table failed: \(ws.status) objects=\(ws.objects.count)"); exit(1) }
+        let win = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 1360, height: 860), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        win.contentView = NSHostingView(rootView: WorkspaceView(ws: ws).frame(width: 1360, height: 860))
+        win.alphaValue = 0.01
+        win.orderFrontRegardless()
+        ws.openTable(obj)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        guard let t = ws.selectedTableTab else { exit(1) }
+        t.pageSize = rows
+        await t.reload(recount: false)
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+        guard let table = findTable(in: win.contentView!) else { print("no table view"); exit(1) }
+        let scroll = table.enclosingScrollView!
+        let rowH = table.rowHeight
+        let visible = scroll.contentView.bounds.height
+        let total = CGFloat(table.numberOfRows) * rowH
+        var frames: [Double] = []
+        // Fling-style scroll: ~1.2 screens per frame, top to bottom and back.
+        let step = visible * 1.2
+        var y: CGFloat = 0
+        var dir: CGFloat = 1
+        for _ in 0..<(Int(ProcessInfo.processInfo.environment["BENCH_FRAMES"] ?? "") ?? 400) {
+            y += step * dir
+            if y > total - visible { y = total - visible; dir = -1 }
+            if y < 0 { y = 0; dir = 1 }
+            let t0 = CACurrentMediaTime()
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            table.layoutSubtreeIfNeeded()
+            win.contentView!.displayIfNeeded()
+            frames.append((CACurrentMediaTime() - t0) * 1000)
+        }
+        frames.sort()
+        let avg = frames.reduce(0, +) / Double(frames.count)
+        print(String(format: "rows=%d cols=%d  frame avg %.2f ms  p50 %.2f  p95 %.2f  max %.2f",
+                     table.numberOfRows, table.numberOfColumns, avg, frames[frames.count / 2], frames[Int(Double(frames.count) * 0.95)], frames.last!))
+        exit(0)
+    }
+
+    private static func findTable(in v: NSView) -> NSTableView? {
+        if let t = v as? GridTableView { return t }
+        for s in v.subviews { if let t = findTable(in: s) { return t } }
+        return nil
     }
 }

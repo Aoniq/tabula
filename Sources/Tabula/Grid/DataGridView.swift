@@ -115,49 +115,88 @@ final class GridRowView: NSTableRowView {
         // vertical column separators, only on real rows
         if let table = superview as? NSTableView {
             NSColor.separatorColor.withAlphaComponent(0.35).setFill()
-            for i in 0..<table.numberOfColumns {
-                let x = table.rect(ofColumn: i).maxX - 1
+            // only columns intersecting the area being drawn
+            let visible = table.columnIndexes(in: convert(dirtyRect, to: table))
+            for i in visible {
+                let x = table.rect(ofColumn: i).maxX - 1 - frame.minX
                 NSRect(x: x, y: 0, width: 1, height: bounds.height).fill()
             }
         }
     }
 }
 
-final class GridCell: NSTableCellView {
-    let label = NSTextField(labelWithString: "")
+/// Shared, precomputed text attributes for grid cells (rebuilt when columns/fonts change).
+struct GridCellStyle {
+    let font: NSFont
+    let monoFont: NSFont
+    let paragraph: NSParagraphStyle
+    let nullText: String
+    let lineHeight: CGFloat
 
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        label.cell?.usesSingleLineMode = true
-        label.cell?.wraps = false
-        label.cell?.isScrollable = true
-        label.drawsBackground = false
-        label.isBordered = false
-        label.focusRingType = .none
-        addSubview(label)
-        textField = label
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 5),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
+    init(fontSize: CGFloat, nullText: String) {
+        font = NSFont.systemFont(ofSize: fontSize)
+        monoFont = NSFont.monospacedDigitSystemFont(ofSize: fontSize, weight: .regular)
+        let p = NSMutableParagraphStyle()
+        p.lineBreakMode = .byTruncatingTail
+        paragraph = p
+        self.nullText = nullText
+        lineHeight = ceil(font.ascender - font.descender + font.leading)
+    }
+}
+
+/// Lightweight cell that draws its own text — no Auto Layout, no NSTextField —
+/// so scrolling through large result sets stays smooth. An NSTextField is only
+/// created while the cell is being edited.
+final class GridCell: NSTableCellView {
+    enum Kind { case value, null, placeholder }
+
+    private var text = ""
+    private var kind = Kind.value
+    private var numeric = false
+    private var deleted = false
+    private var style: GridCellStyle?
+    var editedHighlight = false
+    weak var editor: NSTextField?
+
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    override var wantsDefaultClipping: Bool { true }
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { if oldValue != backgroundStyle { needsDisplay = true } }
     }
 
-    required init?(coder: NSCoder) { fatalError() }
-
-    var editedHighlight = false {
-        didSet { needsDisplay = true }
+    func configure(text: String, kind: Kind, numeric: Bool, deleted: Bool, edited: Bool, style: GridCellStyle) {
+        self.text = text
+        self.kind = kind
+        self.numeric = numeric
+        self.deleted = deleted
+        self.editedHighlight = edited
+        self.style = style
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        guard let style else { return }
         if editedHighlight {
             NSColor.systemYellow.withAlphaComponent(0.28).setFill()
             bounds.fill()
         }
-        super.draw(dirtyRect)
+        if editor != nil { return }
+        let emphasized = backgroundStyle == .emphasized
+        let color: NSColor
+        switch kind {
+        case .value: color = emphasized ? .alternateSelectedControlTextColor : .labelColor
+        case .null, .placeholder: color = emphasized ? NSColor.alternateSelectedControlTextColor.withAlphaComponent(0.6) : .tertiaryLabelColor
+        }
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: numeric && kind == .value ? style.monoFont : style.font,
+            .foregroundColor: color,
+            .paragraphStyle: style.paragraph,
+        ]
+        if deleted { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+        let rect = NSRect(x: 5, y: floor((bounds.height - style.lineHeight) / 2), width: max(0, bounds.width - 9), height: style.lineHeight)
+        (text as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: attrs)
     }
 }
 
@@ -174,8 +213,12 @@ final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private var editing: (row: Int, column: Int, original: String?)?
     private var cancelEdit = false
-    private var font: NSFont { NSFont.systemFont(ofSize: Settings.gridFontSize) }
-    private var monoFont: NSFont { NSFont.monospacedDigitSystemFont(ofSize: Settings.gridFontSize, weight: .regular) }
+    private var style = GridCellStyle(fontSize: Settings.gridFontSize, nullText: Settings.nullText)
+    private var font: NSFont { style.font }
+    /// Per column: render values with monospaced digits.
+    private var numericColumns: [Bool] = []
+
+    private static let numericTypeHints = ["int", "serial", "numeric", "decimal", "float", "double", "real", "money", "number", "oid"]
 
     func update(source: GridDataSource, version: Int) {
         guard let table = tableView else { return }
@@ -205,20 +248,31 @@ final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func rebuildColumns() {
         guard let table = tableView, let source else { return }
+        style = GridCellStyle(fontSize: Settings.gridFontSize, nullText: Settings.nullText)
+        numericColumns = source.gridColumns.map { c in
+            let t = c.typeName.lowercased()
+            return GridCoordinator.numericTypeHints.contains { t.contains($0) } && !t.contains("[]") && !t.hasPrefix("_")
+        }
         for c in table.tableColumns.reversed() { table.removeTableColumn(c) }
-        let sampleRows = min(source.gridRowCount, 60)
+        // sample up to ~150 rows spread over the whole result for column widths
+        let rowCount = source.gridRowCount
+        let sampleIndexes = rowCount <= 150 ? Array(0..<rowCount) : stride(from: 0, to: rowCount, by: max(1, rowCount / 150)).map { $0 }
         let headerFont = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
         for (i, col) in source.gridColumns.enumerated() {
             let tc = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("c\(i)"))
             let title = col.name
             tc.title = title
-            tc.headerToolTip = "\(col.name)  \(col.typeName)"
+            if let fk = source.gridForeignKey(column: i) {
+                tc.headerToolTip = "\(col.name)  \(col.typeName)\n→ \(fk.refTable).\(fk.refColumns.joined(separator: ",")) — ⌥-click a value to open the referenced row"
+            } else {
+                tc.headerToolTip = "\(col.name)  \(col.typeName)"
+            }
             tc.headerCell.lineBreakMode = .byTruncatingTail
             var width = (title as NSString).size(withAttributes: [.font: headerFont]).width + 28
-            for r in 0..<sampleRows {
+            for r in sampleIndexes {
                 if let v = source.gridValue(row: r, column: i) {
                     let s = v.count > 80 ? String(v.prefix(80)) : v
-                    width = max(width, (s as NSString).size(withAttributes: [.font: font]).width + 14)
+                    width = max(width, (s as NSString).size(withAttributes: [.font: font]).width + 20)
                 }
             }
             tc.width = min(max(width, 50), 340)
@@ -251,8 +305,14 @@ final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegat
     func numberOfRows(in tableView: NSTableView) -> Int { source?.gridRowCount ?? 0 }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        let v = GridRowView()
-        v.state = source?.gridRowState(row) ?? .normal
+        let id = NSUserInterfaceItemIdentifier("GridRow")
+        let v = (tableView.makeView(withIdentifier: id, owner: nil) as? GridRowView) ?? {
+            let r = GridRowView()
+            r.identifier = id
+            return r
+        }()
+        let state = source?.gridRowState(row) ?? .normal
+        if v.state != state { v.state = state; v.needsDisplay = true }
         return v
     }
 
@@ -266,30 +326,19 @@ final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegat
         }()
         let state = source.gridRowState(row)
         let value = source.gridValue(row: row, column: col)
-        let isDefault = source.gridIsDefault(row: row, column: col)
-        cell.label.isEditable = false
-        cell.label.delegate = self
-        let numeric = value.map { Double($0) != nil } ?? false
-        cell.label.font = numeric ? monoFont : font
-        cell.label.alignment = .left
-        var attrs: [NSAttributedString.Key: Any] = [.font: cell.label.font!]
-        if state == .deleted { attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-        if isDefault {
-            attrs[.foregroundColor] = NSColor.tertiaryLabelColor
-            cell.label.attributedStringValue = NSAttributedString(string: "DEFAULT", attributes: attrs)
+        let numeric = col < numericColumns.count && numericColumns[col]
+        let edited = state != .inserted && source.gridIsEdited(row: row, column: col)
+        if source.gridIsDefault(row: row, column: col) {
+            cell.configure(text: "DEFAULT", kind: .placeholder, numeric: false, deleted: state == .deleted, edited: edited, style: style)
         } else if let value {
-            attrs[.foregroundColor] = NSColor.labelColor
-            let display = value.count > 500 ? String(value.prefix(500)) + "…" : value
-            cell.label.attributedStringValue = NSAttributedString(string: display.replacingOccurrences(of: "\n", with: "↵ "), attributes: attrs)
+            var display = value
+            if display.utf8.count > 300 { display = String(display.prefix(300)) + "…" }
+            if display.contains(where: { $0 == "\n" || $0 == "\r" }) {
+                display = display.replacingOccurrences(of: "\r\n", with: "↵ ").replacingOccurrences(of: "\n", with: "↵ ").replacingOccurrences(of: "\r", with: "↵ ")
+            }
+            cell.configure(text: display, kind: .value, numeric: numeric, deleted: state == .deleted, edited: edited, style: style)
         } else {
-            attrs[.foregroundColor] = NSColor.tertiaryLabelColor
-            cell.label.attributedStringValue = NSAttributedString(string: Settings.nullText, attributes: attrs)
-        }
-        cell.editedHighlight = source.gridIsEdited(row: row, column: col) && state != .inserted
-        if let fk = source.gridForeignKey(column: col), value != nil {
-            cell.toolTip = "→ \(fk.refTable).\(fk.refColumns.joined(separator: ",")) (⌥-click to open)"
-        } else {
-            cell.toolTip = nil
+            cell.configure(text: style.nullText, kind: .null, numeric: false, deleted: state == .deleted, edited: edited, style: style)
         }
         return cell
     }
@@ -343,13 +392,23 @@ final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegat
         editing = (row, column, original)
         lastColumn = column
         cancelEdit = false
-        let tf = cell.label
-        tf.isEditable = true
-        tf.isSelectable = true
+        cell.editor?.removeFromSuperview()
+        let tf = NSTextField(frame: cell.bounds.insetBy(dx: 1, dy: 1))
+        tf.autoresizingMask = [.width, .height]
+        tf.isBordered = false
+        tf.drawsBackground = true
+        tf.backgroundColor = .textBackgroundColor
+        tf.focusRingType = .none
         tf.font = font
-        tf.textColor = .labelColor
+        tf.lineBreakMode = .byClipping
+        tf.cell?.usesSingleLineMode = true
+        tf.cell?.isScrollable = true
+        tf.delegate = self
         tf.stringValue = original ?? ""
-        tf.placeholderString = original == nil ? Settings.nullText : nil
+        tf.placeholderString = original == nil ? style.nullText : nil
+        cell.addSubview(tf)
+        cell.editor = tf
+        cell.needsDisplay = true
         table.window?.makeFirstResponder(tf)
         tf.currentEditor()?.selectAll(nil)
     }
@@ -369,9 +428,10 @@ final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     func controlTextDidEndEditing(_ obj: Notification) {
         guard let tf = obj.object as? NSTextField, let e = editing, let source else { return }
-        tf.isEditable = false
-        tf.isSelectable = false
         editing = nil
+        defer {
+            tf.removeFromSuperview()
+        }
         let movement = (obj.userInfo?["NSTextMovement"] as? Int).flatMap { NSTextMovement(rawValue: $0) }
         if !cancelEdit {
             let newValue = tf.stringValue

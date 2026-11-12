@@ -88,6 +88,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if DevSnapshot.requested {
             Task { @MainActor in await DevSnapshot.run() }
         }
+        if ScrollBench.requested {
+            Task { @MainActor in await ScrollBench.run() }
+        }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             // ⌘W closes the current tab instead of the window while tabs are open.
             if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
