@@ -212,7 +212,7 @@ enum Settings {
             SettingsKey.mysqldumpPath: ToolLocator.find("mysqldump") ?? "",
             SettingsKey.mysqlPath: ToolLocator.find("mysql") ?? "",
             SettingsKey.sqlite3Path: ToolLocator.find("sqlite3") ?? "/usr/bin/sqlite3",
-            SettingsKey.anthropicModel: "claude-sonnet-5-5",
+            SettingsKey.anthropicModel: "claude-opus-5-5",
         ])
     }
 
