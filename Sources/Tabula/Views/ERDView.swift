@@ -131,7 +131,7 @@ struct ERDView: View {
                 }
             }
             Spacer()
-            Text("Drag tables to arrange · double-click to open · pinch or ⌘-scroll to zoom")
+            Text("Drag tables to arrange · double-click to open · pinch, mouse wheel or ⌘-scroll to zoom")
                 .foregroundStyle(.tertiary)
         }
         .font(.caption)
@@ -264,18 +264,8 @@ struct ERDCanvasRepresentable: NSViewRepresentable {
     }
 }
 
-/// Scroll view where ⌘-scroll zooms (in addition to pinch).
-final class ERDScrollView: NSScrollView {
-    override func scrollWheel(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 120 : event.scrollingDeltaY / 12
-            let p = contentView.convert(event.locationInWindow, from: nil)
-            setMagnification(max(minMagnification, min(maxMagnification, magnification * (1 + delta))), centeredAt: p)
-        } else {
-            super.scrollWheel(with: event)
-        }
-    }
-}
+/// Scroll view hosting the ER canvas (zoom gestures are handled by the canvas itself).
+final class ERDScrollView: NSScrollView {}
 
 final class ERDCanvasView: NSView {
     var scene: ERDScene?
@@ -396,6 +386,53 @@ final class ERDCanvasView: NSView {
             needsDisplay = true
         }
         return menuProvider?(id)
+    }
+
+    // MARK: Zoom gestures
+
+    /// Zoom by `factor`, keeping the canvas point under the cursor fixed on screen.
+    func zoom(by factor: CGFloat, at event: NSEvent) {
+        guard let scroll = enclosingScrollView, factor.isFinite, factor > 0 else { return }
+        let anchor = convert(event.locationInWindow, from: nil)
+        let target = max(scroll.minMagnification, min(scroll.maxMagnification, scroll.magnification * factor))
+        guard abs(target - scroll.magnification) > 0.0001 else { return }
+        scroll.setMagnification(target, centeredAt: anchor)
+    }
+
+    /// Trackpad pinch.
+    override func magnify(with event: NSEvent) {
+        zoom(by: 1 + event.magnification, at: event)
+    }
+
+    /// Trackpad two-finger double-tap / Magic Mouse double-tap: toggle between "fit" and 100%.
+    override func smartMagnify(with event: NSEvent) {
+        guard let scroll = enclosingScrollView, let scene else { return }
+        if abs(scroll.magnification - 1) > 0.05 {
+            scroll.setMagnification(1, centeredAt: convert(event.locationInWindow, from: nil))
+        } else {
+            let target = scene.bounds.insetBy(dx: -40, dy: -40)
+            let vis = scroll.contentView.bounds.size
+            let viewport = CGSize(width: vis.width * scroll.magnification, height: vis.height * scroll.magnification)
+            let fit = max(scroll.minMagnification, min(1, min(viewport.width / max(1, target.width), viewport.height / max(1, target.height))))
+            scroll.setMagnification(fit, centeredAt: CGPoint(x: target.midX, y: target.midY))
+        }
+    }
+
+    /// Mouse wheel zooms; trackpad / Magic Mouse two-finger scrolling pans.
+    /// Holding ⌘, ⌥ or ⌃ always zooms.
+    override func scrollWheel(with event: NSEvent) {
+        let mods = event.modifierFlags.intersection([.command, .option, .control])
+        let isClassicWheel = !event.hasPreciseScrollingDeltas
+        guard !mods.isEmpty || isClassicWheel else {
+            // Forward explicitly: inside SwiftUI hosting the responder chain doesn't reliably reach the scroll view.
+            if let scroll = enclosingScrollView { scroll.scrollWheel(with: event) } else { super.scrollWheel(with: event) }
+            return
+        }
+        let dy = event.scrollingDeltaY != 0 ? event.scrollingDeltaY : event.scrollingDeltaX
+        guard dy != 0 else { return }
+        // One wheel notch (~1 line) ≈ 10% zoom; precise deltas are in points.
+        let factor = isClassicWheel ? pow(1.1, dy) : exp(dy * 0.006)
+        zoom(by: factor, at: event)
     }
 
     override func keyDown(with event: NSEvent) {

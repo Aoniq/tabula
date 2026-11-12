@@ -47,6 +47,32 @@ enum DevSnapshot {
             ws.openERD()
             await pause(2.0)
             snap(win, "\(out)/erd-1-overview.png")
+            if let canvas = findView(ERDCanvasView.self, in: win.contentView!), let scroll = canvas.enclosingScrollView {
+                func wheel(_ lines: Int32, precise: Bool, cmd: Bool = false) -> NSEvent? {
+                    guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: precise ? .pixel : .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0) else { return nil }
+                    let mid = canvas.convert(NSPoint(x: canvas.visibleRect.midX, y: canvas.visibleRect.midY), to: nil)
+                    cg.location = win.convertPoint(toScreen: mid)
+                    if cmd { cg.flags = .maskCommand }
+                    return NSEvent(cgEvent: cg)
+                }
+                let m0 = scroll.magnification
+                if let e = wheel(3, precise: false) { canvas.scrollWheel(with: e) }
+                let m1 = scroll.magnification
+                if let e = wheel(-3, precise: false) { canvas.scrollWheel(with: e) }
+                let m2 = scroll.magnification
+                scroll.magnification = 2
+                let o0 = scroll.contentView.bounds.origin
+                if let e = wheel(-40, precise: true) { canvas.scrollWheel(with: e) }
+                await pause(0.4)
+                let m3 = scroll.magnification
+                let o1 = scroll.contentView.bounds.origin
+                if let e = wheel(30, precise: true, cmd: true) { canvas.scrollWheel(with: e) }
+                let m4 = scroll.magnification
+
+                print(String(format: "zoom test: start %.3f  mouse-wheel up %.3f  down %.3f  trackpad-scroll %.3f (pan dy %.0f)  cmd+trackpad %.3f",
+                             m0, m1, m2, m3, o1.y - o0.y, m4))
+                await pause(0.2)
+            }
             if case .erd(let e) = ws.selectedTab?.content, let g = e.graph {
                 let pick = g.tables.first { $0.name == "orders" || $0.name == "employees" } ?? g.tables.first!
                 e.select(pick.id)
@@ -157,6 +183,12 @@ enum DevSnapshot {
 
         print("snapshots written to \(out)")
         exit(0)
+    }
+
+    private static func findView<T: NSView>(_ type: T.Type, in v: NSView) -> T? {
+        if let t = v as? T { return t }
+        for sub in v.subviews { if let t = findView(type, in: sub) { return t } }
+        return nil
     }
 
     private static func pause(_ s: Double) async {
