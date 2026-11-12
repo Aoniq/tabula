@@ -334,6 +334,8 @@ struct TabulaCommands: Commands {
             Button("Refresh") {
                 Task {
                     if let t = table { await t.mode == .data ? t.reload() : t.loadStructure() }
+                    if case .dashboard(let d) = ws?.selectedTab?.content { await d.refreshAll(); return }
+                    if case .processes(let p) = ws?.selectedTab?.content { await p.refresh(); return }
                     await ws?.reloadObjects()
                 }
             }

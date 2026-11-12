@@ -85,6 +85,21 @@ enum DevSnapshot {
             snap(win, "\(out)/06b-editable-result.png")
         }
 
+        if ws.family != .redis {
+            ws.openDashboard()
+            if case .dashboard(let d) = ws.selectedTab?.content {
+                if d.tiles.isEmpty { d.addSampleTiles() }
+                await d.refreshAll()
+            }
+            await pause(2.0)
+            snap(win, "\(out)/06c-dashboard.png")
+            ws.showInspector = true
+            ws.showAssistant = true
+            await pause(0.8)
+            snap(win, "\(out)/06d-assistant.png")
+            ws.showInspector = false
+        }
+
         ws.openProcessList()
         await pause(1.2)
         snap(win, "\(out)/07-processes.png")
