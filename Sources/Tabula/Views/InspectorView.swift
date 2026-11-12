@@ -29,6 +29,7 @@ struct RowInspectorView: View {
             if let t = ws.selectedTableTab, t.mode == .data {
                 if let row = t.selection.first, row < t.displayRowCount {
                     fields(columns: t.resultColumns, row: row, editable: t.canEditData && t.rowState(row) != .deleted,
+                           placeholder: { t.isDefaultPlaceholder(row: row, column: $0) ? "DEFAULT" : nil },
                            value: { t.isDefaultPlaceholder(row: row, column: $0) ? nil : t.value(row: row, column: $0) },
                            columnInfo: { name in t.columns.first { $0.name == name } },
                            set: { t.setValue($1, row: row, column: $0) })
@@ -55,13 +56,13 @@ struct RowInspectorView: View {
         Text(s).foregroundStyle(.tertiary).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func fields(columns: [ResultColumn], row: Int, editable: Bool, value: @escaping (Int) -> String?, columnInfo: @escaping (String) -> ColumnInfo?, set: @escaping (Int, EditValue) -> Void) -> some View {
+    private func fields(columns: [ResultColumn], row: Int, editable: Bool, placeholder: @escaping (Int) -> String? = { _ in nil }, value: @escaping (Int) -> String?, columnInfo: @escaping (String) -> ColumnInfo?, set: @escaping (Int, EditValue) -> Void) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(columns.enumerated()), id: \.offset) { i, c in
                     InspectorField(name: c.name, type: columnInfo(c.name)?.type ?? c.typeName,
                                    isKey: columnInfo(c.name)?.isPrimaryKey ?? false,
-                                   value: value(i), editable: editable, onCommit: { set(i, $0) })
+                                   value: value(i), placeholder: placeholder(i), editable: editable, onCommit: { set(i, $0) })
                 }
             }
             .padding(12)
@@ -74,6 +75,7 @@ struct InspectorField: View {
     let type: String
     let isKey: Bool
     let value: String?
+    var placeholder: String? = nil
     let editable: Bool
     let onCommit: (EditValue) -> Void
 
@@ -109,7 +111,7 @@ struct InspectorField: View {
                     .menuStyle(.borderlessButton).fixedSize().foregroundStyle(.secondary)
             }
             if editable {
-                TextField(value == nil ? Settings.nullText : "", text: $text, axis: .vertical)
+                TextField(placeholder ?? (value == nil ? Settings.nullText : ""), text: $text, axis: .vertical)
                     .font(.system(.callout, design: .monospaced))
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...12)
