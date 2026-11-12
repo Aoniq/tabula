@@ -85,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = AppearanceMode.current.nsAppearance
+        if DevSnapshot.requested {
+            Task { @MainActor in await DevSnapshot.run() }
+        }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             // ⌘W closes the current tab instead of the window while tabs are open.
             if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,

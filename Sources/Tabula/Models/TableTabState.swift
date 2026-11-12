@@ -42,6 +42,7 @@ final class TableTabState {
 
     var selection = IndexSet()
     var gridVersion = 0
+    var dataGeneration = 0
     var scrollToRow: Int?
 
     init(workspace: WorkspaceState, object: DBObject, mode: Mode) {
@@ -117,6 +118,7 @@ final class TableTabState {
             selection = []
             dataLoaded = true
             gridVersion += 1
+            dataGeneration += 1
             if recount { await recountRows() }
         } catch {
             self.error = error.localizedDescription

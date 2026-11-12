@@ -8,6 +8,8 @@ struct DataGridView: NSViewRepresentable {
     let version: Int
     var scrollToRow: Int? = nil
     var onScrolled: (() -> Void)? = nil
+    /// Changes when a fresh data set is loaded; the grid scrolls back to the top.
+    var dataGeneration: Int = 0
 
     func makeCoordinator() -> GridCoordinator { GridCoordinator() }
 
@@ -27,8 +29,7 @@ struct DataGridView: NSViewRepresentable {
         table.allowsColumnReordering = false
         table.allowsColumnResizing = true
         table.columnAutoresizingStyle = .noColumnAutoresizing
-        table.gridStyleMask = [.solidVerticalGridLineMask]
-        table.gridColor = NSColor.separatorColor.withAlphaComponent(0.35)
+        table.gridStyleMask = []
         table.intercellSpacing = NSSize(width: 0, height: 0)
         table.rowHeight = max(20, Settings.gridFontSize + 9)
         table.headerView = NSTableHeaderView()
@@ -49,6 +50,10 @@ struct DataGridView: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.update(source: source, version: version)
+        if context.coordinator.lastGeneration != dataGeneration {
+            context.coordinator.lastGeneration = dataGeneration
+            DispatchQueue.main.async { context.coordinator.tableView?.scrollRowToVisible(0) }
+        }
         if let row = scrollToRow, let table = context.coordinator.tableView, row < table.numberOfRows {
             DispatchQueue.main.async {
                 table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
@@ -90,11 +95,6 @@ final class GridTableView: NSTableView {
         return super.validateUserInterfaceItem(item)
     }
 
-    override func drawGrid(inClipRect clipRect: NSRect) {
-        // vertical lines only for rows that exist (avoid lines in empty area)
-        let rect = NSRect(x: clipRect.minX, y: clipRect.minY, width: clipRect.width, height: min(clipRect.height, max(0, CGFloat(numberOfRows) * rowHeight - clipRect.minY)))
-        super.drawGrid(inClipRect: rect)
-    }
 }
 
 final class GridRowView: NSTableRowView {
@@ -111,6 +111,14 @@ final class GridRowView: NSTableRowView {
         if let color {
             color.setFill()
             bounds.fill()
+        }
+        // vertical column separators, only on real rows
+        if let table = superview as? NSTableView {
+            NSColor.separatorColor.withAlphaComponent(0.35).setFill()
+            for i in 0..<table.numberOfColumns {
+                let x = table.rect(ofColumn: i).maxX - 1
+                NSRect(x: x, y: 0, width: 1, height: bounds.height).fill()
+            }
         }
     }
 }
@@ -162,6 +170,7 @@ final class GridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var columnSignature: [String] = []
     private var lastVersion = -1
     var lastColumn = 0
+    var lastGeneration = 0
 
     private var editing: (row: Int, column: Int, original: String?)?
     private var cancelEdit = false

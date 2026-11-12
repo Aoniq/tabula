@@ -29,7 +29,7 @@ struct RowInspectorView: View {
             if let t = ws.selectedTableTab, t.mode == .data {
                 if let row = t.selection.first, row < t.displayRowCount {
                     fields(columns: t.resultColumns, row: row, editable: t.canEditData && t.rowState(row) != .deleted,
-                           value: { t.value(row: row, column: $0) },
+                           value: { t.isDefaultPlaceholder(row: row, column: $0) ? nil : t.value(row: row, column: $0) },
                            columnInfo: { name in t.columns.first { $0.name == name } },
                            set: { t.setValue($1, row: row, column: $0) })
                         .id("\(row)-\(t.gridVersion)")

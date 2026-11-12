@@ -24,7 +24,7 @@ struct TableTabView: View {
             ZStack {
                 switch tab.mode {
                 case .data:
-                    DataGridView(source: tab, version: tab.gridVersion, scrollToRow: tab.scrollToRow, onScrolled: { tab.scrollToRow = nil })
+                    DataGridView(source: tab, version: tab.gridVersion, scrollToRow: tab.scrollToRow, onScrolled: { tab.scrollToRow = nil }, dataGeneration: tab.dataGeneration)
                         .overlay {
                             if tab.loading && !tab.dataLoaded { ProgressView() }
                         }
