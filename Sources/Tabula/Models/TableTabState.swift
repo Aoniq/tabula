@@ -508,38 +508,103 @@ final class StructureDraft {
     }
     var hasChanges: Bool { changeCount > 0 }
 
-    private func list(_ s: String, _ d: SQLDialect) -> String {
-        s.split(separator: ",").map { d.quoteIdent($0.trimmingCharacters(in: .whitespaces)) }.joined(separator: ", ")
+    /// Splits a comma separated column list, dropping blanks.
+    static func names(_ s: String) -> [String] {
+        s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
-    private func mysqlDefault(_ v: String) -> String {
-        let u = v.uppercased()
-        if v.hasPrefix("'") || Double(v) != nil || u.hasPrefix("CURRENT_TIMESTAMP") || u == "NULL" || v.contains("(") { return v }
-        return SQLDialect(family: .mysql).literal(v)
+    private func list(_ s: String, _ d: SQLDialect) -> String {
+        Self.names(s).map(d.quoteIdent).joined(separator: ", ")
+    }
+
+    /// Identifier-safe fragment used for generated index / constraint names.
+    private static func slug(_ s: String) -> String {
+        String(s.lowercased().map { $0.isLetter || $0.isNumber || $0 == "_" ? $0 : "_" })
+    }
+
+    private static func generatedName(_ parts: [String]) -> String {
+        String(parts.map(slug).joined(separator: "_").prefix(60))
+    }
+
+    /// Turns a default as typed by the user (or as reported by information_schema, which shows
+    /// strings and expressions bare in MySQL 8 and quoted in MariaDB) into a valid MySQL DEFAULT value.
+    static func mysqlDefault(_ v: String) -> String {
+        let t = v.trimmingCharacters(in: .whitespaces)
+        let u = t.uppercased()
+        if t.hasPrefix("'") || t.hasPrefix("\"") || t.hasPrefix("(") || Double(t) != nil
+            || ["NULL", "TRUE", "FALSE"].contains(u) || u.hasPrefix("B'") || u.hasPrefix("X'") || u.hasPrefix("0X") { return t }
+        if u.hasPrefix("CURRENT_TIMESTAMP") || u.hasPrefix("NOW(") || u.hasPrefix("LOCALTIME") { return t }
+        if ["CURRENT_DATE", "CURRENT_TIME", "CURRENT_USER"].contains(u) || t.contains("(") { return "(\(t))" }
+        return SQLDialect(family: .mysql).literal(t)
     }
 
     func statements(table: DBObject, dialect d: SQLDialect) throws -> [String] {
         let t = d.qualified(table)
-        var out: [String] = []
+        // Order matters: constraints and indexes are dropped before columns (MySQL refuses to drop a column
+        // used by a foreign key; Postgres silently drops dependent indexes so a later DROP INDEX would fail),
+        // and new indexes / foreign keys are created after new columns exist.
+        var dropFKs: [String] = [], dropIndexes: [String] = [], columnOps: [String] = [], addIndexes: [String] = [], addFKs: [String] = []
+
+        // Validation
+        var seen = Set<String>()
+        for (n, c) in columns.enumerated() where !c.dropped {
+            let name = c.name.trimmingCharacters(in: .whitespaces)
+            if name.isEmpty { throw DBError(c.isNew ? "New column #\(n + 1) needs a name" : "Column “\(c.original?.name ?? "")” can't have an empty name") }
+            if !seen.insert(name.lowercased()).inserted { throw DBError("Duplicate column name “\(name)”") }
+            if c.isNew && c.type.trimmingCharacters(in: .whitespaces).isEmpty { throw DBError("Column “\(name)” needs a type") }
+        }
+
+        // Foreign key drops
+        for f in foreignKeys where f.dropped && !f.isNew {
+            guard let o = f.original else { continue }
+            switch d.family {
+            case .mysql: dropFKs.append("ALTER TABLE \(t) DROP FOREIGN KEY \(d.quoteIdent(o.name));")
+            case .postgres: dropFKs.append("ALTER TABLE \(t) DROP CONSTRAINT \(d.quoteIdent(o.name));")
+            default: throw DBError("SQLite can't drop foreign keys from an existing table.")
+            }
+        }
+
+        // Index drops
+        for i in indexes where i.dropped && !i.isNew {
+            guard let o = i.original else { continue }
+            switch d.family {
+            case .postgres:
+                if o.primary || o.definition.isEmpty || (o.unique && (o.name.hasSuffix("_key") || o.name.hasSuffix("_pkey"))) {
+                    dropIndexes.append("ALTER TABLE \(t) DROP CONSTRAINT \(d.quoteIdent(o.name));")
+                } else {
+                    let schema = table.schema.map { d.quoteIdent($0) + "." } ?? ""
+                    dropIndexes.append("DROP INDEX \(schema)\(d.quoteIdent(o.name));")
+                }
+            case .mysql:
+                dropIndexes.append(o.primary ? "ALTER TABLE \(t) DROP PRIMARY KEY;" : "DROP INDEX \(d.quoteIdent(o.name)) ON \(t);")
+            default:
+                if o.name.hasPrefix("sqlite_autoindex") || o.definition.hasPrefix("(auto)") {
+                    throw DBError("SQLite can't drop “\(o.name)”: it belongs to a PRIMARY KEY or UNIQUE constraint of the table.")
+                }
+                dropIndexes.append("DROP INDEX \(d.quoteIdent(o.name));")
+            }
+        }
+
         // Columns
         for c in columns {
-            let name = d.quoteIdent(c.name)
+            let name = d.quoteIdent(c.name.trimmingCharacters(in: .whitespaces))
+            let type = c.type.trimmingCharacters(in: .whitespaces)
+            let def = c.defaultValue.trimmingCharacters(in: .whitespaces)
             if c.isNew {
-                if c.dropped || c.name.trimmingCharacters(in: .whitespaces).isEmpty { continue }
-                guard !c.type.trimmingCharacters(in: .whitespaces).isEmpty else { throw DBError("Column “\(c.name)” needs a type") }
-                var s = "ALTER TABLE \(t) ADD COLUMN \(name) \(c.type)"
+                if c.dropped { continue }
+                var s = "ALTER TABLE \(t) ADD COLUMN \(name) \(type)"
                 if !c.nullable { s += " NOT NULL" }
-                if !c.defaultValue.isEmpty { s += " DEFAULT \(d.family == .mysql ? mysqlDefault(c.defaultValue) : c.defaultValue)" }
+                if !def.isEmpty { s += " DEFAULT \(d.family == .mysql ? Self.mysqlDefault(def) : def)" }
                 if d.family == .mysql && !c.comment.isEmpty { s += " COMMENT \(d.literal(c.comment))" }
-                out.append(s + ";")
+                columnOps.append(s + ";")
                 if d.family == .postgres && !c.comment.isEmpty {
-                    out.append("COMMENT ON COLUMN \(t).\(name) IS \(d.literal(c.comment));")
+                    columnOps.append("COMMENT ON COLUMN \(t).\(name) IS \(d.literal(c.comment));")
                 }
                 continue
             }
             guard let o = c.original else { continue }
             if c.dropped {
-                out.append("ALTER TABLE \(t) DROP COLUMN \(d.quoteIdent(o.name));")
+                columnOps.append("ALTER TABLE \(t) DROP COLUMN \(d.quoteIdent(o.name));")
                 continue
             }
             guard c.isModified else { continue }
@@ -547,75 +612,78 @@ final class StructureDraft {
             case .postgres:
                 var cur = d.quoteIdent(o.name)
                 if c.name != o.name {
-                    out.append("ALTER TABLE \(t) RENAME COLUMN \(cur) TO \(name);")
+                    columnOps.append("ALTER TABLE \(t) RENAME COLUMN \(cur) TO \(name);")
                     cur = name
                 }
-                if c.type != o.type { out.append("ALTER TABLE \(t) ALTER COLUMN \(cur) TYPE \(c.type) USING \(cur)::\(c.type);") }
-                if c.nullable != o.nullable { out.append("ALTER TABLE \(t) ALTER COLUMN \(cur) \(c.nullable ? "DROP" : "SET") NOT NULL;") }
+                if c.type != o.type { columnOps.append("ALTER TABLE \(t) ALTER COLUMN \(cur) TYPE \(type) USING \(cur)::\(type);") }
+                if c.nullable != o.nullable { columnOps.append("ALTER TABLE \(t) ALTER COLUMN \(cur) \(c.nullable ? "DROP" : "SET") NOT NULL;") }
                 if c.defaultValue != (o.defaultValue ?? "") {
-                    out.append(c.defaultValue.isEmpty ? "ALTER TABLE \(t) ALTER COLUMN \(cur) DROP DEFAULT;" : "ALTER TABLE \(t) ALTER COLUMN \(cur) SET DEFAULT \(c.defaultValue);")
+                    columnOps.append(def.isEmpty ? "ALTER TABLE \(t) ALTER COLUMN \(cur) DROP DEFAULT;" : "ALTER TABLE \(t) ALTER COLUMN \(cur) SET DEFAULT \(def);")
                 }
                 if c.comment != o.comment {
-                    out.append("COMMENT ON COLUMN \(t).\(cur) IS \(c.comment.isEmpty ? "NULL" : d.literal(c.comment));")
+                    columnOps.append("COMMENT ON COLUMN \(t).\(cur) IS \(c.comment.isEmpty ? "NULL" : d.literal(c.comment));")
                 }
             case .mysql:
-                var s = "ALTER TABLE \(t) CHANGE COLUMN \(d.quoteIdent(o.name)) \(name) \(c.type)"
-                s += c.nullable ? " NULL" : " NOT NULL"
-                if !c.defaultValue.isEmpty { s += " DEFAULT \(mysqlDefault(c.defaultValue))" }
                 let extra = o.extra.lowercased()
+                if extra.contains("virtual generated") || extra.contains("stored generated") {
+                    throw DBError("“\(o.name)” is a generated column; change it with ALTER TABLE in the SQL editor.")
+                }
+                var s = "ALTER TABLE \(t) CHANGE COLUMN \(d.quoteIdent(o.name)) \(name) \(type)"
+                s += c.nullable ? " NULL" : " NOT NULL"
+                if !def.isEmpty {
+                    s += " DEFAULT \(Self.mysqlDefault(def))"
+                } else if c.defaultValue == (o.defaultValue ?? "") && o.defaultValue == "" {
+                    s += " DEFAULT ''"   // MySQL 8 reports DEFAULT '' as an empty string; keep it
+                }
                 if extra.contains("auto_increment") { s += " AUTO_INCREMENT" }
                 if let r = extra.range(of: "on update current_timestamp") { s += " " + extra[r.lowerBound...].uppercased() }
                 if !c.comment.isEmpty { s += " COMMENT \(d.literal(c.comment))" }
-                out.append(s + ";")
+                columnOps.append(s + ";")
             case .sqlite:
-                if c.name != o.name { out.append("ALTER TABLE \(t) RENAME COLUMN \(d.quoteIdent(o.name)) TO \(name);") }
                 if c.type != o.type || c.nullable != o.nullable || c.defaultValue != (o.defaultValue ?? "") {
                     throw DBError("SQLite can't change the type, nullability or default of an existing column (“\(o.name)”). Create a new table and copy the data instead.")
                 }
+                if c.name != o.name { columnOps.append("ALTER TABLE \(t) RENAME COLUMN \(d.quoteIdent(o.name)) TO \(name);") }
             case .redis:
                 break
             }
         }
-        // Indexes
-        for i in indexes {
-            if i.isNew {
-                guard !i.dropped, !i.columns.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-                let name = i.name.isEmpty ? "idx_\(table.name)_\(i.columns.replacingOccurrences(of: ",", with: "_").replacingOccurrences(of: " ", with: ""))" : i.name
-                out.append("CREATE \(i.unique ? "UNIQUE " : "")INDEX \(d.quoteIdent(name)) ON \(t) (\(list(i.columns, d)));")
-            } else if i.dropped, let o = i.original {
-                switch d.family {
-                case .postgres:
-                    if o.primary || o.definition.isEmpty || (o.unique && o.name.hasSuffix("_key")) {
-                        out.append("ALTER TABLE \(t) DROP CONSTRAINT \(d.quoteIdent(o.name));")
-                    } else {
-                        let schema = table.schema.map { d.quoteIdent($0) + "." } ?? ""
-                        out.append("DROP INDEX \(schema)\(d.quoteIdent(o.name));")
-                    }
-                case .mysql:
-                    out.append(o.primary ? "ALTER TABLE \(t) DROP PRIMARY KEY;" : "DROP INDEX \(d.quoteIdent(o.name)) ON \(t);")
-                default:
-                    out.append("DROP INDEX \(d.quoteIdent(o.name));")
-                }
-            }
+
+        // New indexes
+        for i in indexes where i.isNew && !i.dropped {
+            let cols = Self.names(i.columns)
+            guard !cols.isEmpty else { throw DBError("New index \(i.name.isEmpty ? "" : "“\(i.name)” ")needs at least one column") }
+            let n = i.name.trimmingCharacters(in: .whitespaces)
+            let name = n.isEmpty ? Self.generatedName([i.unique ? "uq" : "idx", table.name] + cols) : n
+            addIndexes.append("CREATE \(i.unique ? "UNIQUE " : "")INDEX \(d.quoteIdent(name)) ON \(t) (\(list(i.columns, d)));")
         }
-        // Foreign keys
-        for f in foreignKeys {
-            if f.isNew {
-                guard !f.dropped, !f.columns.isEmpty, !f.refTable.isEmpty else { continue }
-                if d.family == .sqlite { throw DBError("SQLite can't add foreign keys to an existing table.") }
-                let name = f.name.isEmpty ? "fk_\(table.name)_\(f.refTable)" : f.name
-                var s = "ALTER TABLE \(t) ADD CONSTRAINT \(d.quoteIdent(name)) FOREIGN KEY (\(list(f.columns, d))) REFERENCES \(d.quoteIdent(f.refTable)) (\(list(f.refColumns, d)))"
-                if !f.onDelete.isEmpty && f.onDelete != "NO ACTION" { s += " ON DELETE \(f.onDelete)" }
-                if !f.onUpdate.isEmpty && f.onUpdate != "NO ACTION" { s += " ON UPDATE \(f.onUpdate)" }
-                out.append(s + ";")
-            } else if f.dropped, let o = f.original {
-                switch d.family {
-                case .mysql: out.append("ALTER TABLE \(t) DROP FOREIGN KEY \(d.quoteIdent(o.name));")
-                case .postgres: out.append("ALTER TABLE \(t) DROP CONSTRAINT \(d.quoteIdent(o.name));")
-                default: throw DBError("SQLite can't drop foreign keys from an existing table.")
-                }
+
+        // New foreign keys
+        for f in foreignKeys where f.isNew && !f.dropped {
+            if d.family == .sqlite { throw DBError("SQLite can't add foreign keys to an existing table.") }
+            let cols = Self.names(f.columns), refCols = Self.names(f.refColumns)
+            let refTable = f.refTable.trimmingCharacters(in: .whitespaces)
+            guard !cols.isEmpty else { throw DBError("New foreign key needs at least one column") }
+            guard !refTable.isEmpty else { throw DBError("New foreign key on (\(cols.joined(separator: ", "))) needs a referenced table") }
+            if d.family == .mysql && refCols.isEmpty { throw DBError("New foreign key on (\(cols.joined(separator: ", "))) needs referenced columns") }
+            if !refCols.isEmpty && refCols.count != cols.count {
+                throw DBError("Foreign key has \(cols.count) column\(cols.count == 1 ? "" : "s") but references \(refCols.count)")
             }
+            let n = f.name.trimmingCharacters(in: .whitespaces)
+            let name = n.isEmpty ? Self.generatedName(["fk", table.name] + cols) : n
+            // Unqualified references resolve against the edited table's schema (Postgres).
+            var ref = d.quoteIdent(refTable)
+            if d.family == .postgres {
+                let parts = refTable.split(separator: ".", maxSplits: 1).map(String.init)
+                if parts.count == 2 { ref = d.quoteIdent(parts[0]) + "." + d.quoteIdent(parts[1]) }
+                else if let s = table.schema, !s.isEmpty { ref = d.quoteIdent(s) + "." + d.quoteIdent(refTable) }
+            }
+            var s = "ALTER TABLE \(t) ADD CONSTRAINT \(d.quoteIdent(name)) FOREIGN KEY (\(list(f.columns, d))) REFERENCES \(ref)"
+            if !refCols.isEmpty { s += " (\(list(f.refColumns, d)))" }
+            if !f.onDelete.isEmpty && f.onDelete != "NO ACTION" { s += " ON DELETE \(f.onDelete)" }
+            if !f.onUpdate.isEmpty && f.onUpdate != "NO ACTION" { s += " ON UPDATE \(f.onUpdate)" }
+            addFKs.append(s + ";")
         }
-        return out
+        return dropFKs + dropIndexes + columnOps + addIndexes + addFKs
     }
 }
